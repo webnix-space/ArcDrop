@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import axios from 'axios'
-import { Loader, Droplets, ArrowDownLeft, ArrowUpRight } from 'lucide-react'
+import { Loader, Droplets, ArrowDownLeft, ArrowUpRight, Wallet } from 'lucide-react'
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001/api'
 
@@ -27,7 +27,7 @@ export default function History() {
 
   if (!wallet) {
     return (
-      <div className="card bg-gray-900 border border-gray-800 rounded-2xl p-8 text-center">
+      <div className="bg-gray-900 border border-gray-800 rounded-2xl p-8 text-center">
         <Wallet className="w-12 h-12 text-gray-600 mx-auto mb-4" />
         <h2 className="text-xl font-bold mb-2">No Wallet Connected</h2>
         <p className="text-gray-400">Go to Send Tip and create a wallet first</p>
@@ -39,7 +39,6 @@ export default function History() {
     <div className="space-y-6">
       <h1 className="text-2xl font-bold">Transaction History</h1>
 
-      {/* Stats cards */}
       <div className="grid grid-cols-2 gap-4">
         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5">
           <div className="flex items-center gap-3 mb-2">
@@ -63,7 +62,6 @@ export default function History() {
         </div>
       </div>
 
-      {/* Tips list */}
       <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
         {loading ? (
           <div className="flex items-center justify-center py-12">
