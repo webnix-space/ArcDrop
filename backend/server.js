@@ -2,6 +2,7 @@ import express from 'express'
 import cors from 'cors'
 import dotenv from 'dotenv'
 import { ethers } from 'ethers'
+import { initiateDeveloperControlledWalletsClient } from '@circle-fin/developer-controlled-wallets'
 
 dotenv.config()
 
@@ -31,23 +32,27 @@ const ARC_DROP_ABI = [
 
 const contract = ARC_DROP_CONTRACT ? new ethers.Contract(ARC_DROP_CONTRACT, ARC_DROP_ABI, provider) : null
 
-// Circle API helper
-async function circleRequest(endpoint, method = 'GET', body = null) {
-  const res = await fetch(`https://api.circle.com/v1/w3s${endpoint}`, {
-    method,
-    headers: {
-      'Authorization': `Bearer ${CIRCLE_API_KEY}`,
-      'Content-Type': 'application/json'
-    },
-    body: body ? JSON.stringify(body) : null
-  })
-  const data = await res.json()
-  if (!res.ok) throw new Error(data.message || 'Circle API error')
-  return data
+// Initialize Circle client
+let circleClient = null
+if (CIRCLE_API_KEY && CIRCLE_ENTITY_SECRET) {
+  try {
+    circleClient = initiateDeveloperControlledWalletsClient({
+      apiKey: CIRCLE_API_KEY,
+      entitySecret: CIRCLE_ENTITY_SECRET
+    })
+    console.log('Circle SDK initialized')
+  } catch (err) {
+    console.error('Circle SDK init failed:', err.message)
+  }
 }
 
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'healthy', chainId: ARC_CHAIN_ID, contractConfigured: !!ARC_DROP_CONTRACT })
+  res.json({ 
+    status: 'healthy', 
+    chainId: ARC_CHAIN_ID, 
+    contractConfigured: !!ARC_DROP_CONTRACT,
+    circleConfigured: !!circleClient 
+  })
 })
 
 // Create wallet via Circle API
@@ -55,28 +60,22 @@ app.post('/api/wallet/create', async (req, res) => {
   try {
     const { userId } = req.body
     if (!userId) return res.status(400).json({ error: 'userId required' })
-    if (!CIRCLE_API_KEY || !CIRCLE_ENTITY_SECRET) {
-      return res.status(500).json({ error: 'Circle credentials not configured' })
-    }
+    if (!circleClient) return res.status(500).json({ error: 'Circle not configured' })
 
     // Create wallet set
-    const walletSet = await circleRequest('/developer/walletSets', 'POST', {
-      idempotencyKey: crypto.randomUUID(),
-      name: `ArcDrop-${userId}`,
-      entitySecretCipherText: CIRCLE_ENTITY_SECRET
+    const walletSet = await circleClient.createWalletSet({
+      name: `ArcDrop-${userId}`
     })
 
     const walletSetId = walletSet.data?.walletSet?.id
     if (!walletSetId) throw new Error('Wallet set creation failed')
 
     // Create wallet on Arc Testnet
-    const wallet = await circleRequest('/developer/wallets', 'POST', {
-      idempotencyKey: crypto.randomUUID(),
+    const wallet = await circleClient.createWallets({
       accountType: 'EOA',
       blockchains: ['ARC-TESTNET'],
       count: 1,
-      walletSetId,
-      entitySecretCipherText: CIRCLE_ENTITY_SECRET
+      walletSetId
     })
 
     const walletData = wallet.data?.wallets?.[0]
@@ -92,39 +91,39 @@ app.post('/api/wallet/create', async (req, res) => {
       }
     })
   } catch (err) {
-    console.error('Wallet create error:', err)
+    console.error('Wallet create error:', err.message)
     res.status(500).json({ error: err.message })
   }
 })
 
 // Get wallet + balance
-app.get('/api/wallet/:userId', async (req, res) => {
+app.get('/api/wallet/:walletId', async (req, res) => {
   try {
-    const { userId } = req.params
+    const { walletId } = req.params
+    if (!circleClient) return res.status(500).json({ error: 'Circle not configured' })
 
-    // List wallets and find by name
-    const wallets = await circleRequest('/developer/wallets')
-    const wallet = wallets.data?.wallets?.find(w => w.name?.includes(userId))
+    const balanceRes = await circleClient.getWalletTokenBalance({
+      id: walletId
+    })
 
-    if (!wallet) return res.status(404).json({ error: 'Wallet not found' })
-
-    // Get USDC balance
-    const balanceRes = await circleRequest(`/developer/wallets/${wallet.id}/balances`)
     const usdcBalance = balanceRes.data?.tokenBalances?.find(
       b => b.token?.address?.toLowerCase() === ARC_USDC_ADDRESS.toLowerCase()
     )
 
+    const walletRes = await circleClient.getWallet({ id: walletId })
+    const wallet = walletRes.data?.wallet
+
     res.json({
       success: true,
       wallet: {
-        address: wallet.address,
-        walletId: wallet.id,
+        address: wallet?.address,
+        walletId: wallet?.id,
         balance: usdcBalance?.amount || '0',
         chainId: ARC_CHAIN_ID
       }
     })
   } catch (err) {
-    console.error('Wallet get error:', err)
+    console.error('Wallet get error:', err.message)
     res.status(500).json({ error: err.message })
   }
 })
@@ -133,19 +132,18 @@ app.get('/api/wallet/:userId', async (req, res) => {
 app.post('/api/tip/send', async (req, res) => {
   try {
     const { senderWalletId, recipientAddress, amount, message = '' } = req.body
+    if (!circleClient) return res.status(500).json({ error: 'Circle not configured' })
     if (!contract) return res.status(500).json({ error: 'Contract not configured' })
 
     const usdcAmount = ethers.parseUnits(amount.toString(), 6)
 
-    // Create transaction via Circle API
-    const tx = await circleRequest('/developer/transactions/contractExecution', 'POST', {
-      idempotencyKey: crypto.randomUUID(),
+    // Create contract execution transaction via Circle
+    const tx = await circleClient.createContractExecutionTransaction({
       walletId: senderWalletId,
       contractAddress: ARC_DROP_CONTRACT,
       abiFunctionSignature: 'sendTip(address,uint256,string)',
       abiParameters: [recipientAddress, usdcAmount.toString(), message],
-      feeLevel: 'MEDIUM',
-      entitySecretCipherText: CIRCLE_ENTITY_SECRET
+      feeLevel: 'MEDIUM'
     })
 
     res.json({
@@ -155,7 +153,7 @@ app.post('/api/tip/send', async (req, res) => {
       state: tx.data?.state
     })
   } catch (err) {
-    console.error('Tip send error:', err)
+    console.error('Tip send error:', err.message)
     res.status(500).json({ error: err.message })
   }
 })
@@ -200,6 +198,6 @@ app.get('/api/contract/info', async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`ArcDrop Backend on port ${PORT}`)
-  console.log(`Circle API: ${CIRCLE_API_KEY ? 'Configured' : 'Missing'}`)
+  console.log(`Circle SDK: ${circleClient ? 'Ready' : 'Not configured'}`)
   console.log(`Chain: Arc Testnet (${ARC_CHAIN_ID})`)
 })
