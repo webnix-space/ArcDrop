@@ -1,7 +1,7 @@
 {
   "name": "arcdrop-backend",
   "version": "1.0.0",
-  "description": "ArcDrop nanopayments backend",
+  "description": "ArcDrop nanopayments backend - Gasless USDC tipping on Arc Testnet",
   "main": "server.js",
   "type": "module",
   "scripts": {
@@ -13,7 +13,9 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "axios": "^1.7.2",
-    "ethers": "^6.13.1",
-    "@circle-fin/developer-controlled-wallets": "^3.0.0"
+    "ethers": "^6.13.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
